@@ -6,9 +6,133 @@
     <title>Crypto Dashboard</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
-  <body>
+  <body style="margin: 0; background: #0b0e11;">
     <div id="root"></div>
-    <script type="module" src="/App.jsx"></script>
+
+    <script type="text/babel">
+      const SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+      const INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d'];
+
+      function calcRSI(closes, period = 14) {
+        const rsi = new Array(closes.length).fill(null);
+        if (closes.length <= period) return rsi;
+        let gains = 0, losses = 0;
+        for (let i = 1; i <= period; i++) {
+          const diff = closes[i] - closes[i - 1];
+          if (diff >= 0) gains += diff; else losses -= diff;
+        }
+        let avgGain = gains / period;
+        let avgLoss = losses / period;
+        rsi[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        for (let i = period + 1; i < closes.length; i++) {
+          const diff = closes[i] - closes[i - 1];
+          avgGain = (avgGain * 13 + (diff > 0 ? diff : 0)) / 14;
+          avgLoss = (avgLoss * 13 + (diff < 0 ? -diff : 0)) / 14;
+          rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        }
+        return rsi;
+      }
+
+      function App() {
+        const [symbol, setSymbol] = React.useState('BTCUSDT');
+        const [interval, setIntervalTime] = React.useState('15m');
+        const [klines, setKlines] = React.useState([]);
+        const [loading, setLoading] = React.useState(true);
+
+        React.useEffect(() => {
+          let isMounted = true;
+          setLoading(true);
+          
+          fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=100`)
+            .then(res => res.json())
+            .then(data => {
+              if (!isMounted) return;
+              const formatted = data.map(d => ({
+                time: new Date(d[0]).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+                open: parseFloat(d[1]),
+                high: parseFloat(d[2]),
+                low: parseFloat(d[3]),
+                close: parseFloat(d[4]),
+                volume: parseFloat(d[5])
+              }));
+              setKlines(formatted);
+              setLoading(false);
+            })
+            .catch(err => console.error(err));
+
+          return () => { isMounted = false; };
+        }, [symbol, interval]);
+
+        const closes = klines.map(k => k.close);
+        const rsiValues = calcRSI(closes);
+        const currentRSI = rsiValues.length ? rsiValues[rsiValues.length - 1] : null;
+        const currentPrice = closes.length ? closes[closes.length - 1] : 0;
+
+        const support = klines.length ? Math.min(...klines.map(k => k.low)) : 0;
+        const resistance = klines.length ? Math.max(...klines.map(k => k.high)) : 0;
+        const tvxLong = (support * 1.001).toFixed(2);
+        const targetShort = (resistance * 0.999).toFixed(2);
+
+        return (
+          <div style={{color: '#eaeded', padding: '20px', fontFamily: 'sans-serif'}}>
+            <header style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #2b3139', paddingBottom: '10px'}}>
+              <h1 style={{color: '#f0b90b', fontSize: '20px', margin: 0}}>CRYPTO ANALYZER v1</h1>
+              <div>
+                <select value={symbol} onChange={e => setSymbol(e.target.value)} style={{background: '#1e2329', color: '#fff', padding: '5px', marginRight: '10px', border: '1px solid #474d57', borderRadius: '4px'}}>
+                  {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={interval} onChange={e => setIntervalTime(e.target.value)} style={{background: '#1e2329', color: '#fff', padding: '5px', border: '1px solid #474d57', borderRadius: '4px'}}>
+                  {INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
+                </select>
+              </div>
+            </header>
+
+            {loading ? (
+              <p style={{textAlign: 'center', marginTop: '40px'}}>Завантаження даних з Binance...</p>
+            ) : (
+              <div style={{display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '20px'}}>
+                <div style={{background: '#161a1e', padding: '15px', borderRadius: '8px'}}>
+                  <h3 style={{marginTop: 0, color: '#f0b90b'}}>Аналіз ТВХ та Сигналів</h3>
+                  <p>Поточна ціна: <b style={{fontSize: '16px'}}>{currentPrice}</b></p>
+                  <p>RSI (14): <b style={{color: currentRSI > 70 ? '#f6465d' : currentRSI < 30 ? '#0ecb81' : '#f0b90b'}}>{currentRSI ? currentRSI.toFixed(2) : '--'}</b></p>
+                  <hr style={{borderColor: '#2b3139'}} />
+                  <p style={{color: '#0ecb81'}}>Рекомендована LONG ТВХ (Умовна підтримка): <b style={{fontSize: '16px'}}>{tvxLong}</b></p>
+                  <p style={{color: '#f6465d'}}>Рекомендована SHORT ТВХ (Умовна резистенс): <b style={{fontSize: '16px'}}>{targetShort}</b></p>
+                </div>
+
+                <div style={{background: '#161a1e', padding: '15px', borderRadius: '8px'}}>
+                  <h3 style={{marginTop: 0}}>Останні 5 свічок ({interval})</h3>
+                  <table width="100%" style={{fontSize: '13px', borderCollapse: 'collapse'}}>
+                    <thead>
+                      <tr style={{color: '#848e9c', borderBottom: '1px solid #2b3139'}}>
+                        <th align="left" style={{paddingBottom: '8px'}}>Час</th>
+                        <th align="left" style={{paddingBottom: '8px'}}>Макс (H)</th>
+                        <th align="left" style={{paddingBottom: '8px'}}>Мін (L)</th>
+                        <th align="left" style={{paddingBottom: '8px'}}>Закриття (C)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {klines.slice(-5).reverse().map((k, idx) => (
+                        <tr key={idx} style={{borderBottom: '1px solid #2b3139'}}>
+                          <td style={{padding: '10px 0'}}>{k.time}</td>
+                          <td style={{color: '#0ecb81'}}>{k.high}</td>
+                          <td style={{color: '#f6465d'}}>{k.low}</td>
+                          <td style={{color: k.close >= k.open ? '#0ecb81' : '#f6465d', fontWeight: 'bold'}}>{k.close}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
   </body>
 </html>
